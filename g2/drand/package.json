@@ -1,0 +1,7 @@
+{
+  "name": "g2-drand-verify",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@noble/curves": "1.6.0", "@noble/hashes": "1.5.0" },
+  "overrides": { "@noble/hashes": "1.5.0" }
+}

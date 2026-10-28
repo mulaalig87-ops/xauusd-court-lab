@@ -1,0 +1,6 @@
+# Versions installed on the lab machine (DESKTOP-AGNJ8G4, Python 3.9) on 2026-10-26.
+numpy==2.0.2
+scipy==1.13.1
+pytest==8.4.2
+# Added 2026-10-26 for G2 stage C1 (not installed on the lab machine; CI only).
+hypothesis==6.112.0

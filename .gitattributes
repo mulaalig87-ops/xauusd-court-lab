@@ -1,0 +1,2 @@
+# Byte-exact checkout on every OS (frozen files are verified by SHA-256)
+* -text
