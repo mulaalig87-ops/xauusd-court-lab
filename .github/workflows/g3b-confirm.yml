@@ -31,11 +31,25 @@ jobs:
       - id: m
         name: Mode and shard matrix
         run: |
-          if [ "$GITHUB_REF" = "refs/heads/main" ]; then L=CONFIRMATORY; CN=20; PN=4; CS="range(20)"; PS="range(4)"
-          else L=REHEARSAL; CN=10000; PN=300; CS="[0, 1]"; PS="[0, 1]"
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then L=CONFIRMATORY; else L=REHEARSAL
             echo "::warning title=REHEARSAL::not main; different seed; result is not a gate result"; fi
-          echo "label=$L" >> "$GITHUB_OUTPUT"; echo "calib_n=$CN" >> "$GITHUB_OUTPUT"; echo "power_n=$PN" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(python -c "import json,sys;sys.path.insert(0,'g3b');from consts import LENGTHS;print(json.dumps({'include':[{'mode':m,'li':li,'shard':s,'n':n} for li in range(len(LENGTHS)) for m,n,ss in (('calib',$CN,list($CS)),('power',$PN,list($PS))) for s in ss]}))")" >> "$GITHUB_OUTPUT"
+          M=$(python - "$L" <<'PY'
+          import json, sys
+          sys.path.insert(0, "g3b")
+          from consts import LENGTHS, N_SHARDS
+          if sys.argv[1] == "CONFIRMATORY":
+              n = dict(N_SHARDS); ss = {m: list(range(k)) for m, k in N_SHARDS.items()}
+          else:
+              n = {"calib": 10000, "power": 300}; ss = {"calib": [0, 1], "power": [0, 1]}
+          print(json.dumps({"calib_n": n["calib"], "power_n": n["power"], "matrix": {"include": [
+              {"mode": m, "li": li, "shard": s, "n": n[m]} for li in range(len(LENGTHS)) for m in ("calib", "power") for s in ss[m]]}}))
+          PY
+          )
+          echo "label=$L" >> "$GITHUB_OUTPUT"
+          echo "calib_n=$(echo "$M" | python -c 'import json,sys;print(json.load(sys.stdin)["calib_n"])')" >> "$GITHUB_OUTPUT"
+          echo "power_n=$(echo "$M" | python -c 'import json,sys;print(json.load(sys.stdin)["power_n"])')" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(echo "$M" | python -c 'import json,sys;print(json.dumps(json.load(sys.stdin)["matrix"]))')" >> "$GITHUB_OUTPUT"
+          echo "::notice title=G3b-matrix-$L::$(echo "$M" | python -c 'import json,sys;d=json.load(sys.stdin);print(len(d["matrix"]["include"]), "jobs")')"
       - name: Anchor and anti-fishing checks
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
@@ -112,4 +126,4 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: "g3b-result-${{ needs.seed.outputs.label }}", path: "shards/G3B_RESULT.json\nshards/RUN_INFO.json", overwrite: true }
+        with: { name: "g3b-result-${{ needs.seed.outputs.label }}-attempt${{ github.run_attempt }}", path: "shards/G3B_RESULT.json\nshards/RUN_INFO.json" }

@@ -12,7 +12,7 @@ NULLS = [("N1", n1_iid_t), ("N2", n2_garch), ("N2b", n2b_garch_persistent),
 W_NULL = 10_000
 LAWS, BETAS, W_POWER = ["L1", "L2", "L3"], [0.005, 0.01, 0.02, 0.03, 0.05], 300
 EXPECTED_FEATURE = {"L1": "mom16", "L2": "zlevel64", "L3": "mom16"}
-N_SHARDS = {"calib": 20, "power": 4}  # per length
+N_SHARDS = {"calib": 20, "power": 4}  # per length, confirmatory run (the workflow reads these)
 STAGE = {"calib": 41, "power": 51}
 PINNED = ["court/courts.py", "court/features.py", "court/worlds.py", "court/powerworlds.py",
           "g3b/consts.py", "g3b/release.py", "g3b/run_shard.py", "g3b/decide.py", "g3b/seed.py",
