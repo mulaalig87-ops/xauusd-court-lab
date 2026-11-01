@@ -1,0 +1,129 @@
+name: g3c-confirm
+# Charter docs/G3C_CHARTER_v1.md.
+# CONFIRMATORY: fires when g3c/FREEZE.json is pushed to main.
+# REHEARSAL: the same file pushed on a rehearsal/** branch: anchor checks with --rehearsal, 2 shards per
+# (mode, length) with a DIFFERENT seed, result labelled REHEARSAL. It never counts as a gate result.
+on:
+  push:
+    branches: [main, "rehearsal/**"]
+    paths: ["g3c/FREEZE.json"]
+permissions: { contents: read }
+defaults:
+  run: { shell: bash }        # explicit bash => "bash -eo pipefail"
+jobs:
+  seed:
+    runs-on: ubuntu-24.04
+    outputs:
+      seed_base: "${{ steps.s.outputs.seed_base }}"
+      label: "${{ steps.m.outputs.label }}"
+      calib_n: "${{ steps.m.outputs.calib_n }}"
+      power_n: "${{ steps.m.outputs.power_n }}"
+      matrix: "${{ steps.m.outputs.matrix }}"
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: sha256sum --check --strict MANIFEST_SHA256.txt
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.9" }
+      - run: python -m pip install -r requirements-lab.txt
+      - id: m
+        name: Mode and shard matrix
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then L=CONFIRMATORY; else L=REHEARSAL
+            echo "::warning title=REHEARSAL::not main; different seed; result is not a gate result"; fi
+          M=$(python - "$L" <<'PY'
+          import json, sys
+          sys.path.insert(0, "g3c")
+          from consts import LENGTHS, N_SHARDS
+          if sys.argv[1] == "CONFIRMATORY":
+              n = dict(N_SHARDS); ss = {m: list(range(k)) for m, k in N_SHARDS.items()}
+          else:
+              n = {"calib": 10000, "power": 300}; ss = {"calib": [0, 1], "power": [0, 1]}
+          print(json.dumps({"calib_n": n["calib"], "power_n": n["power"], "matrix": {"include": [
+              {"mode": m, "li": li, "shard": s, "n": n[m]} for li in range(len(LENGTHS)) for m in ("calib", "power") for s in ss[m]]}}))
+          PY
+          )
+          echo "label=$L" >> "$GITHUB_OUTPUT"
+          echo "calib_n=$(echo "$M" | python -c 'import json,sys;print(json.load(sys.stdin)["calib_n"])')" >> "$GITHUB_OUTPUT"
+          echo "power_n=$(echo "$M" | python -c 'import json,sys;print(json.load(sys.stdin)["power_n"])')" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(echo "$M" | python -c 'import json,sys;print(json.dumps(json.load(sys.stdin)["matrix"]))')" >> "$GITHUB_OUTPUT"
+          echo "::notice title=G3c-matrix-$L::$(echo "$M" | python -c 'import json,sys;d=json.load(sys.stdin);print(len(d["matrix"]["include"]), "jobs")')"
+      - name: Anchor and anti-fishing checks
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then python g3c/verify_anchor.py g3c/FREEZE.json
+          else python g3c/verify_anchor.py g3c/FREEZE.json --rehearsal; fi
+      - name: Fetch and BLS-verify round R
+        run: |
+          R=$(python -c 'import json;print(json.load(open("g3c/FREEZE.json"))["R"])')
+          cd g2/drand && npm install --no-audit --no-fund
+          node -e 'const v=p=>require("./node_modules/"+p+"/package.json").version; if(v("@noble/curves")!=="1.6.0"||v("@noble/hashes")!=="1.5.0"){console.error("dependency versions differ");process.exit(1)}'
+          node verify.mjs $R ../../beacon.json
+      - id: s
+        run: |
+          python g3c/seed.py beacon.json g3c/FREEZE.json > seed.json
+          SB=$(python -c 'import json;print(json.load(open("seed.json"))["seed_base"])')
+          [[ "$SB" =~ ^[0-9]+$ ]] || { echo "::error::seed_base missing"; exit 1; }
+          if [ "${{ steps.m.outputs.label }}" = "REHEARSAL" ]; then   # never touch the confirmatory worlds in a rehearsal
+            SB=$(python -c "import hashlib;print(int(hashlib.sha256(b'REHEARSAL-$SB').hexdigest()[:16],16))")
+          fi
+          echo "seed_base=$SB" >> "$GITHUB_OUTPUT"
+          echo "::notice title=G3c-seed-${{ steps.m.outputs.label }}::{\"label\": \"${{ steps.m.outputs.label }}\", \"effective_seed_base\": $SB, \"derivation\": $(cat seed.json)}"
+      - uses: actions/upload-artifact@v4
+        with: { name: g3c-seed, path: "beacon.json\nseed.json" }
+
+  shard:
+    needs: seed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.seed.outputs.matrix) }}" }
+    name: "${{ matrix.mode }} L${{ matrix.li }} s${{ matrix.shard }}"
+    steps:
+      - uses: actions/checkout@v4
+      - run: sha256sum --check --strict MANIFEST_SHA256.txt
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.9" }
+      - run: python -m pip install -r requirements-lab.txt
+      - run: |
+          [[ "${{ needs.seed.outputs.seed_base }}" =~ ^[0-9]+$ ]]
+          python g3c/run_shard.py ${{ matrix.mode }} ${{ matrix.li }} ${{ needs.seed.outputs.seed_base }} ${{ matrix.shard }} ${{ matrix.n }} out
+      - uses: actions/upload-artifact@v4
+        with: { name: "g3c-${{ matrix.mode }}-L${{ matrix.li }}-${{ matrix.shard }}", path: out }
+
+  decide:
+    needs: [seed, shard]
+    if: always() && needs.seed.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: sha256sum --check --strict MANIFEST_SHA256.txt
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.9" }
+      - run: python -m pip install -r requirements-lab.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "g3c-[cp]*-L*-*", merge-multiple: true, path: shards }
+      - run: |
+          echo "{\"mode\": \"${{ needs.seed.outputs.label }}\", \"effective_seed_base\": ${{ needs.seed.outputs.seed_base }}, \"git_sha\": \"$GITHUB_SHA\", \"ref\": \"$GITHUB_REF\", \"run_id\": $GITHUB_RUN_ID, \"run_attempt\": $GITHUB_RUN_ATTEMPT}" > shards/RUN_INFO.json
+          echo "::notice title=G3c-mode::${{ needs.seed.outputs.label }}"
+          python g3c/decide.py shards ${{ needs.seed.outputs.calib_n }} ${{ needs.seed.outputs.power_n }} ${{ needs.seed.outputs.seed_base }}
+      - name: Rehearsal wiring check
+        if: needs.seed.outputs.label == 'REHEARSAL'
+        run: |
+          python - <<'PY'
+          import json
+          r = json.load(open("shards/G3C_RESULT.json"))
+          out = {}
+          for T, R in r["lengths"].items():
+              bad = [p for g in ("G2b", "G3") for p in R[g]["problems"] if p.startswith("integrity") or "out of range" in p or "duplicate" in p]
+              got = {"calib": sum(c["n"] for k, c in R["G2b"]["cells"].items() if k.endswith("@0.05")), "power": sum(c["n"] for c in R["G3"]["cells"].values())}
+              per = {"calib": sorted({c["n"] for c in R["G2b"]["cells"].values()}), "power": sorted({c["n"] for c in R["G3"]["cells"].values()})}
+              out[T] = {"bad": bad, "rows": got, "per_cell": per}
+          print("::notice title=REHEARSAL-wiring::" + json.dumps(out))
+          assert len(out) == 1 and all(not v["bad"] and v["rows"] == {"calib": 12, "power": 30} and v["per_cell"] == {"calib": [2], "power": [2]} for v in out.values()), out
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "g3c-result-${{ needs.seed.outputs.label }}-attempt${{ github.run_attempt }}", path: "shards/G3C_RESULT.json\nshards/RUN_INFO.json" }
