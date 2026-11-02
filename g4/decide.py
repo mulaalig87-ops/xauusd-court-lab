@@ -77,11 +77,11 @@ for li, T in enumerate(LENGTHS):
     for c in range(len(LAWS) * len(BETAS)):
         law, b = LAWS[c // len(BETAS)], BETAS[c % len(BETAS)]
         rows = [r for r in data["power"] if r[0] == c]; n = len(rows); hits = [r for r in rows if r[3] <= 0.01]
-        R["G3"]["cells"][f"{law}_b{b}"] = {"n": n, "power@.05": sum(r[3] <= 0.05 for r in rows) / max(n, 1),
+        R["G3"]["cells"][f"{law}_b{b}"] = {"n": n, "power@.05": sum(r[3] <= 0.05 for r in rows) / max(n, 1), "power@.005": sum(r[3] <= 0.005 for r in rows) / max(n, 1),
             "power@.01": len(hits) / max(n, 1), "attribution@.01": sum(r[5] == EXPECTED_FEATURE[law] for r in hits) / max(1, len(hits))}
     if R["G3"]["status"] == "PASS":
         for law in ("L1", "L2"):
-            if R["G3"]["cells"][f"{law}_b{BAR_BETA}"]["power@.01"] < 0.8:
+            if R["G3"]["cells"][f"{law}_b{BAR_BETA}"]["power@.005"] < 0.8:   # GOLD-3 decides at alpha = 0.005 (charter section 6)
                 R["G3"]["status"] = "FAIL"
     R["gold_entry_allowed_at_this_T"] = R["G2b"]["status"] == "PASS" and R["G3"]["status"] == "PASS"
     res["lengths"][str(T)] = R
